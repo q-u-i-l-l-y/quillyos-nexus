@@ -1,0 +1,42 @@
+# QUILLYOS // NEXUS — Git Ignore
+
+# Node-specific files (each node generates its own)
+nodes/self/*.json
+!nodes/self/.gitkeep
+
+# Local context caches
+*.cache
+.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Environment
+.env
+.venv
+env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Sensitive
+*.key
+*.pem
+*.token
+secrets/

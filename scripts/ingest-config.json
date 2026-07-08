@@ -1,0 +1,119 @@
+{
+  "version": "4.0",
+  "node_id": "auto-detect",
+  "scan_paths": {
+    "termux_home": "$HOME",
+    "termux_quillyos": "$HOME/quillyos",
+    "documents": "/storage/emulated/0/Documents",
+    "downloads": "/storage/emulated/0/Download"
+  },
+  "exclude_patterns": [
+    "*.tmp",
+    "*.cache",
+    "__pycache__",
+    ".git",
+    ".venv",
+    "*.log",
+    "*.pid",
+    "node_modules",
+    ".termux"
+  ],
+  "classification_rules": {
+    "commit-to-nexus": {
+      "description": "Relevant to QuillyOS project \u2014 should be committed to nexus",
+      "patterns": [
+        "*.md",
+        "*.json",
+        "*.py",
+        "*.sh",
+        "*.yaml",
+        "*.yml",
+        "*quilly*",
+        "*nexus*",
+        "*picoclaw*",
+        "*bootstrap*",
+        "*vision*",
+        "*protocol*",
+        "*matrix*",
+        "*entity*"
+      ],
+      "content_indicators": [
+        "quillyos",
+        "nexus",
+        "picoclaw",
+        "protocol",
+        "matrix",
+        "entity",
+        "observation",
+        "evidence",
+        "context",
+        "consensus",
+        "revenue",
+        "arbitrage",
+        "ENDS",
+        "metamaterial",
+        "quantum"
+      ],
+      "action": "stage_for_commit"
+    },
+    "merge-required": {
+      "description": "Overlaps with existing nexus content \u2014 needs merge review",
+      "patterns": [
+        "README*",
+        "LICENSE*",
+        "*.md"
+      ],
+      "content_indicators": [
+        "vision brief",
+        "master vision",
+        "north star",
+        "context matrix",
+        "node type",
+        "taxonomy"
+      ],
+      "action": "flag_for_merge"
+    },
+    "archive": {
+      "description": "Legacy phone_bootstrap \u2014 preserve but don't merge",
+      "patterns": [
+        "*phone_bootstrap*",
+        "*bootstrap*",
+        "*legacy*",
+        "*archive*",
+        "*old*",
+        "*backup*"
+      ],
+      "content_indicators": [
+        "deprecated",
+        "legacy",
+        "old version",
+        "superseded"
+      ],
+      "action": "move_to_archive"
+    },
+    "personal": {
+      "description": "Personal files \u2014 not for the repo",
+      "patterns": [
+        "*.jpg",
+        "*.png",
+        "*.mp4",
+        "*.mp3",
+        "*.pdf",
+        "*personal*",
+        "*private*",
+        "*photo*",
+        "*music*"
+      ],
+      "action": "skip"
+    },
+    "unknown": {
+      "description": "Needs human review to determine relevance",
+      "action": "flag_for_review"
+    }
+  },
+  "plain_language": {
+    "enabled": true,
+    "verbosity": "detailed",
+    "interactive": true
+  }
+}
