@@ -1,0 +1,15 @@
+# Qwen 3.5 0.8B Text-Only
+# Stripped of vision components for Termux deployment
+# Vision components saved in models/vision/ for Pi 3
+
+FROM qwen3.5:0.8b
+
+# Force text-only mode
+PARAMETER num_ctx 8192
+PARAMETER num_predict 2048
+PARAMETER temperature 0.3
+PARAMETER top_k 40
+PARAMETER top_p 0.9
+
+# System prompt for Revenue Engine
+SYSTEM You are the QuillyOS Revenue Engine. Analyze deals, track margins, suggest actions. Output structured JSON with: deal_id, source, margin_percent, risk_level, confidence, recommended_action, timestamp.
