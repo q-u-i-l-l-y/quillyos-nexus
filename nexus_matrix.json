@@ -1,8 +1,8 @@
 {
-  "matrix_id": "nexus-matrix-v4-1-0",
+  "matrix_id": "nexus-matrix-v4-2-0",
   "repository": "quillyos-nexus",
-  "version": "4.1.0",
-  "generated_at": "2026-07-09T01:30:00Z",
+  "version": "4.2.0",
+  "generated_at": "2026-07-09T13:00:00Z",
   "immutable_principles": [
     "quillyos-foundation/VISION.md#the-north-star",
     "quillyos-foundation/VISION.md#immutable-vision",
@@ -14,7 +14,55 @@
     "AGENT_SCHEMA.md",
     "translation/kimi.md",
     "translation/ollama.md",
-    "translation/termux.md"
+    "translation/termux.md",
+    "translation/n8n.md"
+  ],
+  "node_types": [
+    {
+      "type": "agent_brain",
+      "examples": [
+        "Ornith-1.0-9B",
+        "Qwen 2.5",
+        "Claude"
+      ]
+    },
+    {
+      "type": "power_source",
+      "examples": [
+        "Casimir MicroSPARC",
+        "battery",
+        "solar"
+      ]
+    },
+    {
+      "type": "quantum_sampler",
+      "examples": [
+        "WuKong",
+        "Jiuzhang 4.0"
+      ]
+    },
+    {
+      "type": "control_layer",
+      "examples": [
+        "Tianji 4.0",
+        "Origin Pilot OS"
+      ]
+    },
+    {
+      "type": "classical_compute",
+      "examples": [
+        "PicoClaw",
+        "Raspberry Pi",
+        "Termux"
+      ]
+    },
+    {
+      "type": "orchestrator",
+      "examples": [
+        "n8n",
+        "custom scheduler"
+      ]
+    }
   ],
   "superposition": {
     "foundation": {
@@ -79,6 +127,29 @@
       "exports": [
         "CONTEXT_SCHEMA.md"
       ]
+    },
+    "n8n": {
+      "workflows": [
+        "n8n/workflows/",
+        "n8n/templates/"
+      ],
+      "dependencies": [
+        "quillyos-foundation/VISION.md#n8n"
+      ],
+      "exports": [
+        "workflow_specs/"
+      ]
+    },
+    "roadmap": {
+      "milestones": [
+        "quillyos-roadmap/milestones/"
+      ],
+      "dependencies": [
+        "quillyos-foundation/ROADMAP.md"
+      ],
+      "exports": [
+        "milestone_schemas/"
+      ]
     }
   },
   "cross_references": [
@@ -89,16 +160,16 @@
       "confidence": 1.0
     },
     {
-      "from": "translation/kimi.md",
-      "to": "quillyos-foundation/IDENTITY.md",
-      "relationship": "translates",
-      "confidence": 0.95
-    },
-    {
       "from": "AGENT_SCHEMA.md",
       "to": "picoclaw-skills/manifests/master.json",
       "relationship": "describes",
       "confidence": 0.98
+    },
+    {
+      "from": "translation/n8n.md",
+      "to": "n8n/workflows/",
+      "relationship": "orchestrates",
+      "confidence": 0.95
     }
   ]
 }
