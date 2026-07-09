@@ -1,0 +1,104 @@
+{
+  "matrix_id": "nexus-matrix-v4-1-0",
+  "repository": "quillyos-nexus",
+  "version": "4.1.0",
+  "generated_at": "2026-07-09T01:30:00Z",
+  "immutable_principles": [
+    "quillyos-foundation/VISION.md#the-north-star",
+    "quillyos-foundation/VISION.md#immutable-vision",
+    "quillyos-foundation/VISION.md#data-matrix-superposition"
+  ],
+  "evolving_documents": [
+    "SPEC.md",
+    "SUPERPOSITION.md",
+    "AGENT_SCHEMA.md",
+    "translation/kimi.md",
+    "translation/ollama.md",
+    "translation/termux.md"
+  ],
+  "superposition": {
+    "foundation": {
+      "principles": [
+        "VISION.md",
+        "MISSION.md",
+        "ETHICS.md"
+      ],
+      "dependencies": [
+        "quillyos-foundation/VISION.md#the-nexus-protocol"
+      ],
+      "exports": [
+        "nexus_matrix.json"
+      ]
+    },
+    "nexus": {
+      "protocols": [
+        "SPEC.md",
+        "SUPERPOSITION.md",
+        "AGENT_SCHEMA.md",
+        "KNOWLEDGE_SCHEMA.md"
+      ],
+      "dependencies": [],
+      "exports": [
+        "translation/",
+        "schemas/"
+      ]
+    },
+    "knowledge_base": {
+      "discoveries": [
+        "quillyos-knowledge-base/crawl/",
+        "quillyos-knowledge-base/research/"
+      ],
+      "dependencies": [
+        "quillyos-knowledge-base/knowledge_index.md"
+      ],
+      "exports": [
+        "KNOWLEDGE_SCHEMA.md",
+        "REASONING_SCHEMA.md"
+      ]
+    },
+    "skills": {
+      "capabilities": [
+        "picoclaw-skills/skills/"
+      ],
+      "dependencies": [
+        "picoclaw-skills/manifests/master.json"
+      ],
+      "exports": [
+        "AGENT_SCHEMA.md",
+        "TASK_SCHEMA.md"
+      ]
+    },
+    "runtime": {
+      "executors": [
+        "picoclaw-dev/runtime/",
+        "picoclaw-dev/agents/"
+      ],
+      "dependencies": [
+        "picoclaw-dev/config/"
+      ],
+      "exports": [
+        "CONTEXT_SCHEMA.md"
+      ]
+    }
+  },
+  "cross_references": [
+    {
+      "from": "SUPERPOSITION.md",
+      "to": "quillyos-foundation/VISION.md#data-matrix-superposition",
+      "relationship": "implements",
+      "confidence": 1.0
+    },
+    {
+      "from": "translation/kimi.md",
+      "to": "quillyos-foundation/IDENTITY.md",
+      "relationship": "translates",
+      "confidence": 0.95
+    },
+    {
+      "from": "AGENT_SCHEMA.md",
+      "to": "picoclaw-skills/manifests/master.json",
+      "relationship": "describes",
+      "confidence": 0.98
+    }
+  ]
+}
