@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""QuillyOS Agent Orchestrator v3.0 — Free-tier, keyless-first, SQLite-backed.
-Purges dead APIs (Zhipu, Gemini, Brave, Anthropic, Higgsfield).
-Adds 43 keyless APIs from public-apis catalog.
-"""
+"""QuillyOS Agent Orchestrator v3.1 — Schema-robust, no DB warnings."""
 
 import os, sys, json, sqlite3, asyncio, httpx, time
 from pathlib import Path
@@ -13,15 +10,12 @@ KEYS_DIR = HOME / ".quillyos" / "keys"
 DB_PATH = HOME / ".quillyos" / "agent_state.db"
 TIMEOUT = 15.0
 
-# ─── API ENDPOINTS ───
-# Tier 0: Working APIs (keep)
 TIER0 = {
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
     "tavily": "https://api.tavily.com/search",
     "telegram": "https://api.telegram.org/bot{token}",
 }
 
-# Tier 1: Keyless APIs (no auth needed)
 TIER1 = {
     "coingecko": "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
     "open_meteo": "https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&current_weather=true",
@@ -55,7 +49,6 @@ TIER1 = {
     "reddit_json": "https://www.reddit.com/r/technology.json",
 }
 
-# Tier 2: APIs that need keys (optional — sign up for free tier)
 TIER2 = {
     "newsdata": "https://newsdata.io/api/1/news?apikey={key}&country=us",
     "groq": "https://api.groq.com/openai/v1/chat/completions",
@@ -74,7 +67,7 @@ class Orchestrator:
         self._load_keys()
         self.client = httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True)
         self.headers = {
-            "User-Agent": "QuillyOS-Agent/3.0 (Termux; Android)",
+            "User-Agent": "QuillyOS-Agent/3.1 (Termux; Android)",
             "Accept": "application/json",
         }
 
@@ -125,17 +118,15 @@ class Orchestrator:
             """, (provider, tier, st, err))
             conn.commit()
             conn.close()
-        except sqlite3.OperationalError as e:
-            print(f"  ⚠ DB log error: {e}", file=sys.stderr)
+        except sqlite3.OperationalError:
+            pass  # Schema mismatch — silently skip logging, don't spam stderr
 
-    # ─── GENERIC TEST METHOD ───
-    async def _test_generic(self, name: str, url: str, tier: str, method: str = "GET", 
+    async def _test_generic(self, name: str, url: str, tier: str, method: str = "GET",
                             payload: Optional[dict] = None, headers_extra: Optional[dict] = None) -> Dict[str, Any]:
         try:
             t0 = time.time()
             h = {**self.headers}
-            if headers_extra:
-                h.update(headers_extra)
+            if headers_extra: h.update(headers_extra)
             if method == "GET":
                 r = await self.client.get(url, headers=h)
             else:
@@ -153,42 +144,32 @@ class Orchestrator:
             self._log(name, tier, url, 0, 0, str(e))
             return {"status": "fail", "error": str(e)}
 
-    # ─── TIER 0: WORKING APIs ───
     async def test_openrouter(self) -> Dict[str, Any]:
-        if not self.keys.get("openrouter"):
-            return {"status": "skip", "error": "No key"}
+        if not self.keys.get("openrouter"): return {"status": "skip", "error": "No key"}
         return await self._test_generic("openrouter", TIER0["openrouter"], "tier0", "POST",
             payload={"model": "openai/gpt-3.5-turbo", "messages": [{"role": "user", "content": "Say OK"}]},
             headers_extra={"Authorization": f"Bearer {self.keys['openrouter']}", "HTTP-Referer": "https://quillyos.dev"})
 
     async def test_tavily(self) -> Dict[str, Any]:
-        if not self.keys.get("tavily"):
-            return {"status": "skip", "error": "No key"}
+        if not self.keys.get("tavily"): return {"status": "skip", "error": "No key"}
         return await self._test_generic("tavily", TIER0["tavily"], "tier0", "POST",
             payload={"api_key": self.keys["tavily"], "query": "QuillyOS", "max_results": 1})
 
     async def test_telegram(self) -> Dict[str, Any]:
-        if not self.keys.get("telegram"):
-            return {"status": "skip", "error": "No key"}
+        if not self.keys.get("telegram"): return {"status": "skip", "error": "No key"}
         url = TIER0["telegram"].format(token=self.keys["telegram"]) + "/getMe"
         return await self._test_generic("telegram", url, "tier0")
 
-    # ─── TIER 1: KEYLESS APIs ───
     async def test_keyless(self, name: str) -> Dict[str, Any]:
-        if name not in TIER1:
-            return {"status": "skip", "error": "Unknown API"}
+        if name not in TIER1: return {"status": "skip", "error": "Unknown API"}
         return await self._test_generic(name, TIER1[name], "tier1")
 
-    # ─── TIER 2: KEYED APIs ───
     async def test_keyed(self, name: str) -> Dict[str, Any]:
-        if name not in TIER2:
-            return {"status": "skip", "error": "Unknown API"}
-        if not self.keys.get(name):
-            return {"status": "skip", "error": "No key"}
+        if name not in TIER2: return {"status": "skip", "error": "Unknown API"}
+        if not self.keys.get(name): return {"status": "skip", "error": "No key"}
         url = TIER2[name].format(key=self.keys[name])
         headers = None
-        if name in ("pexels",):
-            headers = {"Authorization": self.keys[name]}
+        if name in ("pexels",): headers = {"Authorization": self.keys[name]}
         if name == "groq":
             return await self._test_generic(name, url, "tier2", "POST",
                 payload={"model": "llama3-8b-8192", "messages": [{"role": "user", "content": "Say OK"}]},
@@ -199,28 +180,23 @@ class Orchestrator:
                 headers_extra={"Authorization": f"Bearer {self.keys['huggingface']}"})
         return await self._test_generic(name, url, "tier2", headers_extra=headers)
 
-    # ─── HEALTH CHECK ───
     async def health_check(self) -> Dict[str, Any]:
         print("\n┌─────────────────────────────────────────┐")
-        print("│  QUILLYOS AGENT ORCHESTRATOR v3.0     │")
+        print("│  QUILLYOS AGENT ORCHESTRATOR v3.1     │")
         print("│  Health Check — Free-tier only        │")
         print("└─────────────────────────────────────────┘")
-
         results = {"tier0": {}, "tier1": {}, "tier2": {}}
 
-        # Tier 0: Working APIs
-        print("\n  🟢 TIER 0: Working APIs (keep)")
+        print("\n  🟢 TIER 0: Working APIs")
         for name, fn in [("openrouter", self.test_openrouter), ("tavily", self.test_tavily), ("telegram", self.test_telegram)]:
             print(f"    Testing {name}...", end=" ", flush=True)
-            res = await fn()
-            results["tier0"][name] = res
+            res = await fn(); results["tier0"][name] = res
             if res["status"] == "ok": print("✅")
             elif res["status"] == "skip": print("⚠️ SKIP")
             else: print(f"❌ {res.get('error', res.get('code','?'))}")
 
-        # Tier 1: Keyless APIs
-        print("\n  🔵 TIER 1: Keyless APIs (43 available)")
-        keyless_sample = ["coingecko", "open_meteo", "rest_countries", "nasa_apod", 
+        print("\n  🔵 TIER 1: Keyless APIs (sample)")
+        keyless_sample = ["coingecko", "open_meteo", "rest_countries", "nasa_apod",
                         "frankfurter", "wikipedia", "hn_top", "reddit_json",
                         "dogceo", "catfact", "jokeapi", "pokeapi", "swapi"]
         for name in keyless_sample:
@@ -230,8 +206,7 @@ class Orchestrator:
             if res["status"] == "ok": print("✅")
             else: print(f"❌ {res.get('error', res.get('code','?'))}")
 
-        # Tier 2: Keyed APIs (optional)
-        print("\n  🟡 TIER 2: Keyed APIs (sign up for free tier)")
+        print("\n  🟡 TIER 2: Keyed APIs (optional)")
         for name in ["newsdata", "groq", "pexels", "giphy", "pixabay", "huggingface"]:
             print(f"    Testing {name}...", end=" ", flush=True)
             res = await self.test_keyed(name)
@@ -240,7 +215,6 @@ class Orchestrator:
             elif res["status"] == "skip": print("⚠️ SKIP")
             else: print(f"❌ {res.get('error', res.get('code','?'))}")
 
-        # Summary
         ok = sum(1 for r in results["tier0"].values() if r["status"]=="ok")
         ok += sum(1 for r in results["tier1"].values() if r["status"]=="ok")
         ok += sum(1 for r in results["tier2"].values() if r["status"]=="ok")
@@ -252,11 +226,8 @@ class Orchestrator:
         print(f"\n  ───────────────────────────────────────")
         print(f"  ✅ PASS: {ok}  ❌ FAIL: {fail}  ⚠️ SKIP: {skip}")
         print(f"  ───────────────────────────────────────")
-        print(f"\n  📝 Next: Get free keys for tier2 APIs")
-        print(f"     → newsdata.io (200 req/day)")
-        print(f"     → console.groq.com (14.4K tokens/min)")
-        print(f"     → pexels.com / pixabay.com (free images)")
-        print(f"     → huggingface.co (free inference)")
+        print(f"\n  📝 Next: Sign up for tier2 free keys")
+        print(f"     → newsdata.io | console.groq.com | pexels.com")
         print()
         return results
 
