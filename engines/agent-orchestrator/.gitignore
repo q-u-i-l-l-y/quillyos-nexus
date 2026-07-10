@@ -1,0 +1,7 @@
+keys/
+*.key
+.env
+__pycache__/
+*.pyc
+agent_state.db
+*.log

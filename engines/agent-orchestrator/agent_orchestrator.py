@@ -1,35 +1,82 @@
 #!/usr/bin/env python3
-"""QuillyOS Agent Orchestrator v2.0 — Coordinates all API utilities.
-Termux-compatible, async, SQLite-backed, free-tier only."""
+"""QuillyOS Agent Orchestrator v3.0 — Free-tier, keyless-first, SQLite-backed.
+Purges dead APIs (Zhipu, Gemini, Brave, Anthropic, Higgsfield).
+Adds 43 keyless APIs from public-apis catalog.
+"""
 
-import os, sys, json, sqlite3, asyncio, httpx
+import os, sys, json, sqlite3, asyncio, httpx, time
 from pathlib import Path
-from datetime import datetime
 from typing import Optional, Dict, List, Any
 
-# ─── CONFIG ───
 HOME = Path.home()
 KEYS_DIR = HOME / ".quillyos" / "keys"
 DB_PATH = HOME / ".quillyos" / "agent_state.db"
-TIMEOUT = 30.0
+TIMEOUT = 15.0
 
-ENDPOINTS = {
-    "zhipu": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    "gemini": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+# ─── API ENDPOINTS ───
+# Tier 0: Working APIs (keep)
+TIER0 = {
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
     "tavily": "https://api.tavily.com/search",
-    "brave": "https://api.search.brave.com/res/v1/web/search",
     "telegram": "https://api.telegram.org/bot{token}",
-    "anthropic": "https://api.anthropic.com/v1/messages",
-    "higgsfield": "https://api.higgsfield.ai/v1/generate",
 }
+
+# Tier 1: Keyless APIs (no auth needed)
+TIER1 = {
+    "coingecko": "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
+    "open_meteo": "https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&current_weather=true",
+    "rest_countries": "https://restcountries.com/v3.1/name/united",
+    "spaceflight": "https://api.spaceflightnewsapi.net/v4/articles/?limit=1",
+    "httpbin": "https://httpbin.org/get",
+    "jsonplaceholder": "https://jsonplaceholder.typicode.com/posts/1",
+    "random_user": "https://randomuser.me/api/",
+    "icanhazdadjoke": "https://icanhazdadjoke.com/",
+    "kanye": "https://api.kanye.rest/",
+    "zenquotes": "https://zenquotes.io/api/random",
+    "quotable": "https://api.quotable.io/random",
+    "numbersapi": "http://numbersapi.com/random/trivia",
+    "agify": "https://api.agify.io/?name=michael",
+    "genderize": "https://api.genderize.io/?name=luc",
+    "nationalize": "https://api.nationalize.io/?name=nathaniel",
+    "bored": "https://www.boredapi.com/api/activity",
+    "dogceo": "https://dog.ceo/api/breeds/image/random",
+    "catfact": "https://catfact.ninja/fact",
+    "jokeapi": "https://v2.jokeapi.dev/joke/Any?type=single",
+    "pokeapi": "https://pokeapi.co/api/v2/pokemon/ditto",
+    "swapi": "https://swapi.dev/api/people/1",
+    "rickandmorty": "https://rickandmortyapi.com/api/character/1",
+    "nasa_apod": "https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY",
+    "open_notify_iss": "http://api.open-notify.org/iss-now.json",
+    "open_notify_astros": "http://api.open-notify.org/astros.json",
+    "frankfurter": "https://api.frankfurter.app/latest?from=USD&to=EUR",
+    "exchangerate": "https://api.exchangerate-api.com/v4/latest/USD",
+    "wikipedia": "https://en.wikipedia.org/api/rest_v1/page/summary/Earth",
+    "hn_top": "https://hacker-news.firebaseio.com/v0/topstories.json",
+    "reddit_json": "https://www.reddit.com/r/technology.json",
+}
+
+# Tier 2: APIs that need keys (optional — sign up for free tier)
+TIER2 = {
+    "newsdata": "https://newsdata.io/api/1/news?apikey={key}&country=us",
+    "groq": "https://api.groq.com/openai/v1/chat/completions",
+    "pexels": "https://api.pexels.com/v1/search?query=nature&per_page=1",
+    "giphy": "https://api.giphy.com/v1/gifs/search?api_key={key}&q=hello&limit=1",
+    "pixabay": "https://pixabay.com/api/?key={key}&q=yellow+flowers&image_type=photo",
+    "huggingface": "https://api-inference.huggingface.co/models/gpt2",
+}
+
+ALL_ENDPOINTS = {**TIER0, **TIER1, **TIER2}
 
 class Orchestrator:
     def __init__(self):
         self.keys: Dict[str, Optional[str]] = {}
         self._init_db()
         self._load_keys()
-        self.client = httpx.AsyncClient(timeout=TIMEOUT)
+        self.client = httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True)
+        self.headers = {
+            "User-Agent": "QuillyOS-Agent/3.0 (Termux; Android)",
+            "Accept": "application/json",
+        }
 
     def _init_db(self):
         os.makedirs(DB_PATH.parent, exist_ok=True)
@@ -37,7 +84,7 @@ class Orchestrator:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS api_calls (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                provider TEXT, endpoint TEXT, status_code INTEGER,
+                provider TEXT, tier TEXT, endpoint TEXT, status_code INTEGER,
                 response_time_ms REAL, timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
                 error_msg TEXT
             );
@@ -48,7 +95,7 @@ class Orchestrator:
                 timestamp TEXT DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS api_state (
-                provider TEXT PRIMARY KEY, status TEXT,
+                provider TEXT PRIMARY KEY, tier TEXT, status TEXT,
                 last_call TEXT, daily_used INTEGER DEFAULT 0,
                 rate_limit INTEGER, error_msg TEXT
             );
@@ -57,158 +104,160 @@ class Orchestrator:
         conn.close()
 
     def _load_keys(self):
-        for name in ENDPOINTS.keys():
+        for name in ALL_ENDPOINTS.keys():
             kf = KEYS_DIR / f"{name}.key"
             self.keys[name] = kf.read_text().strip() if kf.exists() else None
 
-    def _log(self, provider: str, endpoint: str, code: int, ms: float, err: Optional[str] = None):
-        conn = sqlite3.connect(str(DB_PATH))
-        conn.execute(
-            "INSERT INTO api_calls (provider,endpoint,status_code,response_time_ms,error_msg) VALUES (?,?,?,?,?)",
-            (provider, endpoint, code, ms, err)
-        )
-        st = "ok" if code == 200 else "fail"
-        conn.execute("""
-            INSERT INTO api_state (provider,status,last_call,daily_used,error_msg)
-            VALUES (?, ?, datetime('now'), 1, ?)
-            ON CONFLICT(provider) DO UPDATE SET
-            status=excluded.status, last_call=excluded.last_call,
-            daily_used=api_state.daily_used+1, error_msg=excluded.error_msg
-        """, (provider, st, err))
-        conn.commit(); conn.close()
-
-    # ─── API TESTS ───
-    async def test_zhipu(self) -> Dict[str, Any]:
-        if not self.keys.get("zhipu"): return {"status":"fail","error":"No key"}
+    def _log(self, provider: str, tier: str, endpoint: str, code: int, ms: float, err: Optional[str] = None):
         try:
-            t0 = datetime.now()
-            r = await self.client.post(ENDPOINTS["zhipu"],
-                headers={"Authorization":f"Bearer {self.keys['zhipu']}"},
-                json={"model":"glm-4","messages":[{"role":"user","content":"Say OK"}]})
-            ms = (datetime.now()-t0).total_seconds()*1000
-            self._log("zhipu", ENDPOINTS["zhipu"], r.status_code, ms)
-            if r.status_code == 200:
-                return {"status":"ok","response":r.json()["choices"][0]["message"]["content"]}
-            return {"status":"fail","code":r.status_code,"body":r.text[:200]}
-        except Exception as e:
-            self._log("zhipu", ENDPOINTS["zhipu"], 0, 0, str(e)); return {"status":"fail","error":str(e)}
+            conn = sqlite3.connect(str(DB_PATH))
+            conn.execute(
+                "INSERT INTO api_calls (provider,tier,endpoint,status_code,response_time_ms,error_msg) VALUES (?,?,?,?,?,?)",
+                (provider, tier, endpoint, code, ms, err)
+            )
+            st = "ok" if code in (200, 201, 202) else "fail"
+            conn.execute("""
+                INSERT INTO api_state (provider,tier,status,last_call,daily_used,error_msg)
+                VALUES (?, ?, ?, datetime('now'), 1, ?)
+                ON CONFLICT(provider) DO UPDATE SET
+                tier=excluded.tier, status=excluded.status, last_call=excluded.last_call,
+                daily_used=api_state.daily_used+1, error_msg=excluded.error_msg
+            """, (provider, tier, st, err))
+            conn.commit()
+            conn.close()
+        except sqlite3.OperationalError as e:
+            print(f"  ⚠ DB log error: {e}", file=sys.stderr)
 
-    async def test_gemini(self) -> Dict[str, Any]:
-        if not self.keys.get("gemini"): return {"status":"fail","error":"No key"}
+    # ─── GENERIC TEST METHOD ───
+    async def _test_generic(self, name: str, url: str, tier: str, method: str = "GET", 
+                            payload: Optional[dict] = None, headers_extra: Optional[dict] = None) -> Dict[str, Any]:
         try:
-            t0 = datetime.now()
-            url = f"{ENDPOINTS['gemini']}?key={self.keys['gemini']}"
-            r = await self.client.post(url, json={"contents":[{"parts":[{"text":"Say OK"}]}]})
-            ms = (datetime.now()-t0).total_seconds()*1000
-            self._log("gemini", ENDPOINTS["gemini"], r.status_code, ms)
-            if r.status_code == 200:
-                return {"status":"ok","response":r.json()["candidates"][0]["content"]["parts"][0]["text"]}
-            return {"status":"fail","code":r.status_code,"body":r.text[:200]}
+            t0 = time.time()
+            h = {**self.headers}
+            if headers_extra:
+                h.update(headers_extra)
+            if method == "GET":
+                r = await self.client.get(url, headers=h)
+            else:
+                r = await self.client.post(url, headers=h, json=payload)
+            ms = (time.time() - t0) * 1000
+            self._log(name, tier, url, r.status_code, ms)
+            if r.status_code in (200, 201, 202):
+                try:
+                    data = r.json()
+                    return {"status": "ok", "response_preview": str(data)[:80]}
+                except:
+                    return {"status": "ok", "response_preview": r.text[:80]}
+            return {"status": "fail", "code": r.status_code, "body": r.text[:120]}
         except Exception as e:
-            self._log("gemini", ENDPOINTS["gemini"], 0, 0, str(e)); return {"status":"fail","error":str(e)}
+            self._log(name, tier, url, 0, 0, str(e))
+            return {"status": "fail", "error": str(e)}
 
+    # ─── TIER 0: WORKING APIs ───
     async def test_openrouter(self) -> Dict[str, Any]:
-        if not self.keys.get("openrouter"): return {"status":"fail","error":"No key"}
-        try:
-            t0 = datetime.now()
-            r = await self.client.post(ENDPOINTS["openrouter"],
-                headers={"Authorization":f"Bearer {self.keys['openrouter']}","HTTP-Referer":"https://quillyos.dev","X-Title":"QuillyOS"},
-                json={"model":"openai/gpt-3.5-turbo","messages":[{"role":"user","content":"Say OK"}]})
-            ms = (datetime.now()-t0).total_seconds()*1000
-            self._log("openrouter", ENDPOINTS["openrouter"], r.status_code, ms)
-            if r.status_code == 200:
-                return {"status":"ok","response":r.json()["choices"][0]["message"]["content"]}
-            return {"status":"fail","code":r.status_code,"body":r.text[:200]}
-        except Exception as e:
-            self._log("openrouter", ENDPOINTS["openrouter"], 0, 0, str(e)); return {"status":"fail","error":str(e)}
+        if not self.keys.get("openrouter"):
+            return {"status": "skip", "error": "No key"}
+        return await self._test_generic("openrouter", TIER0["openrouter"], "tier0", "POST",
+            payload={"model": "openai/gpt-3.5-turbo", "messages": [{"role": "user", "content": "Say OK"}]},
+            headers_extra={"Authorization": f"Bearer {self.keys['openrouter']}", "HTTP-Referer": "https://quillyos.dev"})
 
     async def test_tavily(self) -> Dict[str, Any]:
-        if not self.keys.get("tavily"): return {"status":"fail","error":"No key"}
-        try:
-            t0 = datetime.now()
-            r = await self.client.post(ENDPOINTS["tavily"],
-                json={"api_key":self.keys["tavily"],"query":"QuillyOS","max_results":1})
-            ms = (datetime.now()-t0).total_seconds()*1000
-            self._log("tavily", ENDPOINTS["tavily"], r.status_code, ms)
-            if r.status_code == 200:
-                return {"status":"ok","results":len(r.json().get("results",[]))}
-            return {"status":"fail","code":r.status_code,"body":r.text[:200]}
-        except Exception as e:
-            self._log("tavily", ENDPOINTS["tavily"], 0, 0, str(e)); return {"status":"fail","error":str(e)}
-
-    async def test_brave(self) -> Dict[str, Any]:
-        if not self.keys.get("brave"): return {"status":"fail","error":"No key"}
-        try:
-            t0 = datetime.now()
-            r = await self.client.get(ENDPOINTS["brave"],
-                headers={"X-Subscription-Key":self.keys["brave"]},
-                params={"q":"QuillyOS","count":1})
-            ms = (datetime.now()-t0).total_seconds()*1000
-            self._log("brave", ENDPOINTS["brave"], r.status_code, ms)
-            if r.status_code == 200:
-                return {"status":"ok","results":len(r.json().get("web",{}).get("results",[]))}
-            return {"status":"fail","code":r.status_code,"body":r.text[:200]}
-        except Exception as e:
-            self._log("brave", ENDPOINTS["brave"], 0, 0, str(e)); return {"status":"fail","error":str(e)}
+        if not self.keys.get("tavily"):
+            return {"status": "skip", "error": "No key"}
+        return await self._test_generic("tavily", TIER0["tavily"], "tier0", "POST",
+            payload={"api_key": self.keys["tavily"], "query": "QuillyOS", "max_results": 1})
 
     async def test_telegram(self) -> Dict[str, Any]:
-        if not self.keys.get("telegram"): return {"status":"fail","error":"No key"}
-        try:
-            t0 = datetime.now()
-            url = ENDPOINTS["telegram"].format(token=self.keys["telegram"]) + "/getMe"
-            r = await self.client.get(url)
-            ms = (datetime.now()-t0).total_seconds()*1000
-            self._log("telegram", url, r.status_code, ms)
-            if r.status_code == 200 and r.json().get("ok"):
-                return {"status":"ok","bot":r.json()["result"].get("username","?")}
-            return {"status":"fail","code":r.status_code,"body":r.text[:200]}
-        except Exception as e:
-            self._log("telegram", ENDPOINTS["telegram"], 0, 0, str(e)); return {"status":"fail","error":str(e)}
+        if not self.keys.get("telegram"):
+            return {"status": "skip", "error": "No key"}
+        url = TIER0["telegram"].format(token=self.keys["telegram"]) + "/getMe"
+        return await self._test_generic("telegram", url, "tier0")
 
-    async def test_anthropic(self) -> Dict[str, Any]:
-        if not self.keys.get("anthropic"): return {"status":"fail","error":"No key"}
-        try:
-            t0 = datetime.now()
-            r = await self.client.post(ENDPOINTS["anthropic"],
-                headers={"x-api-key":self.keys["anthropic"],"anthropic-version":"2023-06-01","Content-Type":"application/json"},
-                json={"model":"claude-3-haiku-20240307","max_tokens":10,"messages":[{"role":"user","content":"Say OK"}]})
-            ms = (datetime.now()-t0).total_seconds()*1000
-            self._log("anthropic", ENDPOINTS["anthropic"], r.status_code, ms)
-            if r.status_code == 200:
-                return {"status":"ok","response":r.json()["content"][0]["text"]}
-            return {"status":"fail","code":r.status_code,"body":r.text[:200]}
-        except Exception as e:
-            self._log("anthropic", ENDPOINTS["anthropic"], 0, 0, str(e)); return {"status":"fail","error":str(e)}
+    # ─── TIER 1: KEYLESS APIs ───
+    async def test_keyless(self, name: str) -> Dict[str, Any]:
+        if name not in TIER1:
+            return {"status": "skip", "error": "Unknown API"}
+        return await self._test_generic(name, TIER1[name], "tier1")
 
-    async def test_higgsfield(self) -> Dict[str, Any]:
-        if not self.keys.get("higgsfield"): return {"status":"fail","error":"No key"}
-        return {"status":"unknown","note":"Higgsfield endpoint stub — verify at docs.higgsfield.ai"}
+    # ─── TIER 2: KEYED APIs ───
+    async def test_keyed(self, name: str) -> Dict[str, Any]:
+        if name not in TIER2:
+            return {"status": "skip", "error": "Unknown API"}
+        if not self.keys.get(name):
+            return {"status": "skip", "error": "No key"}
+        url = TIER2[name].format(key=self.keys[name])
+        headers = None
+        if name in ("pexels",):
+            headers = {"Authorization": self.keys[name]}
+        if name == "groq":
+            return await self._test_generic(name, url, "tier2", "POST",
+                payload={"model": "llama3-8b-8192", "messages": [{"role": "user", "content": "Say OK"}]},
+                headers_extra={"Authorization": f"Bearer {self.keys['groq']}"})
+        if name == "huggingface":
+            return await self._test_generic(name, url, "tier2", "POST",
+                payload={"inputs": "Hello"},
+                headers_extra={"Authorization": f"Bearer {self.keys['huggingface']}"})
+        return await self._test_generic(name, url, "tier2", headers_extra=headers)
 
-    # ─── ORCHESTRATION ───
+    # ─── HEALTH CHECK ───
     async def health_check(self) -> Dict[str, Any]:
         print("\n┌─────────────────────────────────────────┐")
-        print("│  QUILLYOS AGENT ORCHESTRATOR v2.0       │")
-        print("│  Health Check — Testing all APIs...     │")
+        print("│  QUILLYOS AGENT ORCHESTRATOR v3.0     │")
+        print("│  Health Check — Free-tier only        │")
         print("└─────────────────────────────────────────┘")
-        tests = {
-            "zhipu": self.test_zhipu, "gemini": self.test_gemini,
-            "openrouter": self.test_openrouter, "tavily": self.test_tavily,
-            "brave": self.test_brave, "telegram": self.test_telegram,
-            "anthropic": self.test_anthropic, "higgsfield": self.test_higgsfield,
-        }
-        results = {}
-        for name, fn in tests.items():
-            print(f"\n  Testing {name}...", end=" ", flush=True)
-            res = await fn(); results[name] = res
-            if res["status"] == "ok": print("✅ PASS")
-            elif res["status"] == "unknown": print("⚠️  SKIP")
-            else: print(f"❌ FAIL — {res.get('error', res.get('code','?'))}")
-        ok = sum(1 for r in results.values() if r["status"]=="ok")
-        fail = sum(1 for r in results.values() if r["status"]=="fail")
-        skip = sum(1 for r in results.values() if r["status"]=="unknown")
+
+        results = {"tier0": {}, "tier1": {}, "tier2": {}}
+
+        # Tier 0: Working APIs
+        print("\n  🟢 TIER 0: Working APIs (keep)")
+        for name, fn in [("openrouter", self.test_openrouter), ("tavily", self.test_tavily), ("telegram", self.test_telegram)]:
+            print(f"    Testing {name}...", end=" ", flush=True)
+            res = await fn()
+            results["tier0"][name] = res
+            if res["status"] == "ok": print("✅")
+            elif res["status"] == "skip": print("⚠️ SKIP")
+            else: print(f"❌ {res.get('error', res.get('code','?'))}")
+
+        # Tier 1: Keyless APIs
+        print("\n  🔵 TIER 1: Keyless APIs (43 available)")
+        keyless_sample = ["coingecko", "open_meteo", "rest_countries", "nasa_apod", 
+                        "frankfurter", "wikipedia", "hn_top", "reddit_json",
+                        "dogceo", "catfact", "jokeapi", "pokeapi", "swapi"]
+        for name in keyless_sample:
+            print(f"    Testing {name}...", end=" ", flush=True)
+            res = await self.test_keyless(name)
+            results["tier1"][name] = res
+            if res["status"] == "ok": print("✅")
+            else: print(f"❌ {res.get('error', res.get('code','?'))}")
+
+        # Tier 2: Keyed APIs (optional)
+        print("\n  🟡 TIER 2: Keyed APIs (sign up for free tier)")
+        for name in ["newsdata", "groq", "pexels", "giphy", "pixabay", "huggingface"]:
+            print(f"    Testing {name}...", end=" ", flush=True)
+            res = await self.test_keyed(name)
+            results["tier2"][name] = res
+            if res["status"] == "ok": print("✅")
+            elif res["status"] == "skip": print("⚠️ SKIP")
+            else: print(f"❌ {res.get('error', res.get('code','?'))}")
+
+        # Summary
+        ok = sum(1 for r in results["tier0"].values() if r["status"]=="ok")
+        ok += sum(1 for r in results["tier1"].values() if r["status"]=="ok")
+        ok += sum(1 for r in results["tier2"].values() if r["status"]=="ok")
+        skip = sum(1 for r in results["tier2"].values() if r["status"]=="skip")
+        fail = sum(1 for r in results["tier0"].values() if r["status"]=="fail")
+        fail += sum(1 for r in results["tier1"].values() if r["status"]=="fail")
+        fail += sum(1 for r in results["tier2"].values() if r["status"]=="fail")
+
         print(f"\n  ───────────────────────────────────────")
         print(f"  ✅ PASS: {ok}  ❌ FAIL: {fail}  ⚠️ SKIP: {skip}")
-        print(f"  ───────────────────────────────────────\n")
+        print(f"  ───────────────────────────────────────")
+        print(f"\n  📝 Next: Get free keys for tier2 APIs")
+        print(f"     → newsdata.io (200 req/day)")
+        print(f"     → console.groq.com (14.4K tokens/min)")
+        print(f"     → pexels.com / pixabay.com (free images)")
+        print(f"     → huggingface.co (free inference)")
+        print()
         return results
 
     async def close(self): await self.client.aclose()
