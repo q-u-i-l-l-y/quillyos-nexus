@@ -27,6 +27,9 @@ async def run_pipeline(topic="technology trends"):
     # await post_to_telegram(post)
     print("  → [DRY RUN] Post ready but not sent. Uncomment to enable live posting.")
 
+
+    from html_report import generate_report
+    generate_report(discovered, post, status="dry-run")
     return post
 
 if __name__ == "__main__":
