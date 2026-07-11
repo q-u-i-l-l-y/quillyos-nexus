@@ -1,26 +1,7 @@
-"""QuillyOS Telegram Bot Frontend
-Primary interaction layer for the UGC Pipeline and Agent Orchestrator.
-
-Commands:
-  /start    - Welcome + project status
-  /status   - Live API health, vault summary, last pipeline run
-  /discover - Run discovery on a topic
-  /preview  - Run pipeline dry-run, return generated post
-  /post     - Run pipeline + live post (admin only)
-  /keys     - Masked vault status (admin only)
-  /cron     - Show cron status (admin only)
-  /help     - Command reference
-
-Usage:
-  python telegram_bot.py          # Start polling (foreground)
-  nohup python telegram_bot.py &  # Start polling (background)
-
-Constraints:
-  - Termux-safe: no heredocs, pathlib only
-  - Free-tier: uses existing API keys only
-  - Async: httpx for all HTTP calls
+"""QuillyOS Telegram Bot Frontend — DEBUG VERSION
+Adds verbose logging to diagnose polling errors.
 """
-import asyncio, json, sys, sqlite3, subprocess
+import asyncio, json, sys, sqlite3, subprocess, traceback
 from pathlib import Path
 from datetime import datetime
 
@@ -31,36 +12,52 @@ DB = NEXUS / "agent_state.db"
 PIPELINE = NEXUS / "engines" / "ugc-pipeline"
 ORCH = NEXUS / "engines" / "agent-orchestrator"
 
-ADMIN_IDS = set()  # Populate with your Telegram user ID after /start
+ADMIN_IDS = set()
 
 def load_key(name):
-    kf = KEYS / f"{name}.key"
-    return kf.read_text().strip() if kf.exists() else None
+    kf = KEYS / "{name}.key".format(name=name)
+    if not kf.exists():
+        print("[!] Key file not found: {kf}".format(kf=kf))
+        return None
+    content = kf.read_text().strip()
+    print("[+] Loaded key: {name} ({chars} chars)".format(name=name, chars=len(content)))
+    return content
 
 async def tg_api(method, payload):
     token = load_key("telegram")
     if not token:
+        print("[!] No telegram token loaded")
         return {"ok": False, "error": "No telegram key"}
     import httpx
+    url = "https://api.telegram.org/bot{token}/{method}".format(token=token, method=method)
+    print("[→] API call: {method} payload={payload}".format(method=method, payload=payload))
     async with httpx.AsyncClient() as client:
-        r = await client.post(f"https://api.telegram.org/bot{token}/{method}", json=payload)
-        return r.json() if r.status_code == 200 else {"ok": False, "error": r.text[:200]}
+        try:
+            r = await client.post(url, json=payload, timeout=30)
+            print("[←] Response: {status} {text}".format(status=r.status_code, text=r.text[:200]))
+            return r.json() if r.status_code == 200 else {"ok": False, "error": r.text[:200]}
+        except Exception as e:
+            print("[!] HTTP error: {e}".format(e=repr(e)))
+            return {"ok": False, "error": repr(e)}
 
 async def get_updates(offset=None):
     payload = {"offset": offset, "limit": 10}
     data = await tg_api("getUpdates", payload)
+    if not data.get("ok"):
+        print("[!] getUpdates failed: {error}".format(error=data.get("error", "unknown")))
+        return []
     return data.get("result", [])
 
 async def send_message(chat_id, text, parse_mode="HTML"):
     return await tg_api("sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
 
-# ─── Command Handlers ───
+# --- Command Handlers ---
 
 async def cmd_start(chat_id, user_id, username):
     ADMIN_IDS.add(user_id)
-    text = f"""<b>🚀 QuillyOS Bot</b>
+    text = """<b>🚀 QuillyOS Bot</b>
 
-Welcome, {{username}}!
+Welcome, {username}!
 You are now registered as <b>admin</b>.
 
 <b>Project:</b> QuillyOS Revenue Engine
@@ -71,7 +68,6 @@ Use /help to see all commands.""".format(username=username or "user")
     await send_message(chat_id, text)
 
 async def cmd_status(chat_id):
-    # Run orchestrator status as subprocess
     try:
         result = subprocess.run(
             [sys.executable, str(ORCH / "agent_orchestrator.py"), "status"],
@@ -79,9 +75,8 @@ async def cmd_status(chat_id):
         )
         orch_out = result.stdout[-800:] if result.stdout else "No output"
     except Exception as e:
-        orch_out = f"Error: {e}"
+        orch_out = "Error: {e}".format(e=e)
 
-    # Check last pipeline run
     last_run = "Never"
     if DB.exists():
         try:
@@ -95,23 +90,22 @@ async def cmd_status(chat_id):
         except:
             pass
 
-    text = f"""<b>📊 QuillyOS Status</b>
+    text = """<b>📊 QuillyOS Status</b>
 
-<b>Last Pipeline Run:</b> {{last_run}}
+<b>Last Pipeline Run:</b> {last_run}
 <b>Vault Size:</b> 40 APIs
 <b>Healthy:</b> 16
 <b>Pending:</b> 6
 
 <b>Orchestrator Output:</b>
-<pre>{{orch_out}}</pre>
+<pre>{orch_out}</pre>
 
 Use /discover to find content.
 Use /preview to generate a post.""".format(last_run=last_run, orch_out=orch_out)
     await send_message(chat_id, text)
 
 async def cmd_discover(chat_id, topic="technology trends"):
-    await send_message(chat_id, f"🔍 Discovering: <b>{{topic}}</b>...".format(topic=topic))
-    # Import and run discover module
+    await send_message(chat_id, "🔍 Discovering: <b>{topic}</b>...".format(topic=topic))
     sys.path.insert(0, str(PIPELINE))
     from discover import discover_all
     try:
@@ -124,10 +118,10 @@ async def cmd_discover(chat_id, topic="technology trends"):
         for i, s in enumerate(sources[:3], 1):
             title = s.get("title", "No title")
             url = s.get("url", "")
-            lines.append(f"{{i}}. <a href="{{url}}">{{title}}</a>".format(i=i, url=url, title=title))
+            lines.append("{i}. <a href=\"{url}\">{title}</a>".format(i=i, url=url, title=title))
         await send_message(chat_id, "\n".join(lines))
     except Exception as e:
-        await send_message(chat_id, f"❌ Error: <pre>{{e}}</pre>".format(e=e))
+        await send_message(chat_id, "❌ Error: <pre>{e}</pre>".format(e=e))
     finally:
         sys.path.remove(str(PIPELINE))
 
@@ -143,18 +137,18 @@ async def cmd_preview(chat_id, topic="technology trends"):
             await send_message(chat_id, "❌ No content to generate from.")
             return
         best = sources[0]
-        summary = f"{{best.get('title', 'No title')}}: {{best.get('content', best.get('url', ''))}}"
+        summary = "{title}: {content}".format(title=best.get('title', 'No title'), content=best.get('content', best.get('url', '')))
         post = await generate_post(summary)
-        text = f"""<b>📝 Preview Post</b>
+        text = """<b>📝 Preview Post</b>
 
-<pre>{{post}}</pre>
+<pre>{post}</pre>
 
-<b>Source:</b> {{best.get('url', 'N/A')}}
+<b>Source:</b> {url}
 
-This is a <b>dry-run</b>. Use /post to publish live.""".format(post=post, best=best)
+This is a <b>dry-run</b>. Use /post to publish live.""".format(post=post, url=best.get('url', 'N/A'))
         await send_message(chat_id, text)
     except Exception as e:
-        await send_message(chat_id, f"❌ Error: <pre>{{e}}</pre>".format(e=e))
+        await send_message(chat_id, "❌ Error: <pre>{e}</pre>".format(e=e))
     finally:
         sys.path.remove(str(PIPELINE))
 
@@ -163,8 +157,6 @@ async def cmd_post(chat_id, user_id, topic="technology trends"):
         await send_message(chat_id, "⛔ Admin only. Use /start to register.")
         return
     await send_message(chat_id, "📤 Running pipeline LIVE...")
-    # This would run the actual pipeline with live posting enabled
-    # For safety, we require the user to have uncommented the post line
     await send_message(chat_id, "⚠️ Live posting requires uncommenting the post line in pipeline.py. See Prompt 4 in NEXT_SESSION_PROMPTS.md.")
 
 async def cmd_keys(chat_id, user_id):
@@ -174,9 +166,16 @@ async def cmd_keys(chat_id, user_id):
     lines = ["<b>🔐 Vault Status</b>"]
     for kf in sorted(KEYS.glob("*.key")):
         key = kf.read_text().strip()
-        status = "✅" if len(key) > 30 else "⏳"
-        masked = key[:4] + "..." + key[-4:] if len(key) > 8 else "EMPTY"
-        lines.append(f"{{status}} {{kf.stem:20s}} {{masked}}".format(status=status, kf=kf, masked=masked))
+        if len(key) > 40:
+            status = "✅"
+            masked = key[:4] + "..." + key[-4:]
+        elif len(key) > 5:
+            status = "⏳"
+            masked = key[:4] + "..." + key[-4:]
+        else:
+            status = "🔓"
+            masked = key or "(empty)"
+        lines.append("{status} {name:25s} {chars:>3} chars  {masked}".format(status=status, name=kf.stem, chars=len(key), masked=masked))
     await send_message(chat_id, "<pre>\n".join(lines) + "</pre>")
 
 async def cmd_cron(chat_id):
@@ -184,8 +183,8 @@ async def cmd_cron(chat_id):
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         cron = result.stdout if result.stdout else "No cron jobs found."
     except Exception as e:
-        cron = f"Error: {e}"
-    text = f"<b>⏰ Cron Status</b>\n\n<pre>{{cron}}</pre>".format(cron=cron)
+        cron = "Error: {e}".format(e=e)
+    text = "<b>⏰ Cron Status</b>\n\n<pre>{cron}</pre>".format(cron=cron)
     await send_message(chat_id, text)
 
 async def cmd_help(chat_id):
@@ -209,15 +208,17 @@ async def cmd_help(chat_id):
 """
     await send_message(chat_id, text)
 
-# ─── Main Loop ───
+# --- Main Loop ---
 
 async def main():
     print("[+] QuillyOS Telegram Bot starting...")
     print("[+] Send /start to your bot from your Telegram account.")
+    print("[+] Debug mode: verbose logging enabled")
     offset = None
     while True:
         try:
             updates = await get_updates(offset)
+            print("[+] Got {count} updates".format(count=len(updates)))
             for update in updates:
                 offset = update["update_id"] + 1
                 msg = update.get("message", {})
@@ -225,6 +226,7 @@ async def main():
                 user_id = msg.get("from", {}).get("id")
                 username = msg.get("from", {}).get("username", "")
                 text = msg.get("text", "")
+                print("[+] Message from {user}: {text}".format(user=username or user_id, text=text))
                 if not text:
                     continue
                 parts = text.split(maxsplit=1)
@@ -248,11 +250,12 @@ async def main():
                 elif cmd == "/help":
                     await cmd_help(chat_id)
                 else:
-                    await send_message(chat_id, f"Unknown command: {{cmd}}. Use /help.".format(cmd=cmd))
+                    await send_message(chat_id, "Unknown command: {cmd}. Use /help.".format(cmd=cmd))
 
             await asyncio.sleep(2)
         except Exception as e:
-            print(f"[!] Bot error: {{e}}")
+            print("[!] Bot error: {e}".format(e=repr(e)))
+            traceback.print_exc()
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
